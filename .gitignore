@@ -6,3 +6,6 @@ __pycache__/
 
 # Ignoring environment variable file
 .env
+
+# Ignoring SQL initialization folder
+init.sql/

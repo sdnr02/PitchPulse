@@ -22,8 +22,8 @@ engine = create_engine(
     echo = os.getenv("DEBUG") # Additional logging in debug mode
 )
 
-# Initializing session objects for atomic business transactions that are grouped together
-local_session = sessionmaker(
+# Initializing session factory for creating sessions that group atomic business logic
+session_factory = sessionmaker(
     autocommit=False, # Prevents automatic commit of transactions
     autoflush=False, # Prevents automatic temp flush of transactions
     bind=engine # Links the session to the specific database instance
@@ -40,7 +40,7 @@ class DatabaseManager:
 
     def __init__(self):
         self.engine= engine
-        self.session = local_session
+        self.session_factory = session_factory
 
     def get_session(self) -> Generator[Session,str,str]:
         """
@@ -70,7 +70,8 @@ class DatabaseManager:
             db.add(User(name="Alice"))
             session_gen.send("commit")  # Manually commit
         """
-        db = local_session()
+        # Calls the factory method to create a new local database session
+        db = self.session_factory()
         final_status = "closed"
         
         try:
@@ -94,12 +95,14 @@ class DatabaseManager:
                 logger.info("Session flushed via send command")
 
         except Exception as e:
+            # Exception handling
             final_status = "error"
             logger.error(f"Error while yielding database session: {e}")
             db.rollback()
             raise
 
         finally:
+            # Closing connection post function execution
             db.close()
 
         return final_status
