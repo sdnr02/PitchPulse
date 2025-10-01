@@ -1,9 +1,10 @@
 import os
-from typing import Generator, Optional
+from contextlib import contextmanager
+from typing import Generator, Optional, Dict, List, Any, Sequence
 
 from loguru import logger
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, Row
 from sqlalchemy.orm import sessionmaker, Session, DeclarativeBase
 
 from core.base import Base
@@ -224,7 +225,36 @@ class DatabaseManager:
             raise
 
     def drop_all_tables(self) -> None:
-        # Docstring here
+        """
+        Delete all database tables defined by SQLAlchemy models.
+
+        This method drops (deletes) all tables in the database that are defined by
+        SQLAlchemy model classes inheriting from the declarative base. It uses the
+        metadata registry to generate DROP TABLE statements for all registered models.
+        This is typically used for testing, development resets, or complete database
+        cleanup scenarios.
+
+        Raises:
+            Exception: Re-raises any exception that occurs during table deletion
+                after logging the error. Common exceptions include connection errors,
+                permission issues, or foreign key constraint violations.
+
+        Example:
+            - db_manager = DatabaseManager()
+            - db_manager.drop_all_tables()
+            # All tables and their data are now permanently deleted
+
+        Warning:
+            This operation is DESTRUCTIVE and IRREVERSIBLE. All data in the tables
+            will be permanently lost. Use with extreme caution, preferably only in
+            development or testing environments. Never use in production without
+            proper backups.
+
+        Note:
+            This method may fail if there are foreign key constraints or if other
+            database objects depend on these tables. The order of table deletion
+            is handled automatically by SQLAlchemy based on foreign key relationships.
+        """
         # Deleting all the tables defined by SQLAlchemy models in the metadata
         try:
             Base.metadata.drop_all(bind=self.engine)
@@ -234,3 +264,189 @@ class DatabaseManager:
             # Exception Handling
             logger.error(f"Failed to drop the tables: {e}")
             raise
+
+    def execute_raw_sql(
+        self,
+        query: str,
+        params: Optional[Dict[str, Any]] = None
+    ) -> Sequence[Row[Any]]:
+        """
+        Execute raw SQL queries directly against the database.
+
+        This method provides a way to execute raw SQL statements when SQLAlchemy's
+        ORM capabilities are insufficient or when you need direct SQL control. It
+        handles parameter binding to prevent SQL injection and automatically manages
+        the database connection lifecycle.
+
+        Args:
+            query (str): The raw SQL query string to execute. Use :param_name syntax
+                for parameter placeholders (e.g., "SELECT * FROM users WHERE id = :user_id")
+            params (Optional[Dict[str, Any]]): Dictionary of parameter names and values
+                for parameter binding. Keys should match the placeholders in the query.
+                Defaults to None if no parameters are needed.
+
+        Returns:
+            Sequence[Row[Any]]: A sequence of Row objects containing the query results.
+                Each Row can be accessed like a tuple or dictionary. Returns empty
+                sequence if query produces no results.
+
+        Raises:
+            Exception: Re-raises any exception that occurs during query execution
+                after logging the error. Common exceptions include:
+                - Syntax errors in the SQL query
+                - Invalid parameter names or types
+                - Connection failures
+                - Permission/authorization issues
+
+        Example:
+            Basic query without parameters:
+                - db_manager = DatabaseManager()
+                - results = db_manager.execute_raw_sql("SELECT * FROM users")
+                - for row in results:
+                    print(row.name, row.email)
+            
+            Query with parameters (prevents SQL injection):
+                - query = "SELECT * FROM users WHERE age > :min_age AND city = :city"
+                - params = {"min_age": 18, "city": "New York"}
+                - results = db_manager.execute_raw_sql(query, params)
+            
+            Complex query with multiple operations:
+                - query = '''
+                    WITH active_users AS (
+                        SELECT id, name FROM users WHERE status = :status
+                    )
+                    SELECT * FROM active_users WHERE created_at > :date
+                '''
+                - params = {"status": "active", "date": "2024-01-01"}
+                - results = db_manager.execute_raw_sql(query, params)
+
+        Warning:
+            - Use this method sparingly. Prefer SQLAlchemy ORM methods when possible
+            for better type safety, query building, and relationship handling.
+            - Always use parameter binding (the params argument) instead of string
+            formatting to prevent SQL injection attacks.
+            - This method creates a new connection for each call. For multiple queries,
+            consider using get_session() or get_transaction_session() instead.
+
+        Note:
+            - The connection is automatically closed after the query completes
+            - This method is read-heavy; for write operations requiring transactions,
+            use get_session() or get_transaction_session()
+            - Results are not automatically committed; use within a transaction if
+            executing INSERT/UPDATE/DELETE statements
+        """
+        # Connecting to the database for query execution
+        try:
+            with self.engine.connect() as connection:
+                # Running the query against the database
+                if params:
+                    result = connection.execute(text(query),params)
+                else:
+                    result = connection.execute(text(query))
+                return result.fetchall()
+            
+        except Exception as e:
+            logger.error(f"Raw SQL Execution failed: {e}")
+            raise
+
+    @contextmanager
+    def get_transaction_session(self) -> Generator[Session,None,None]:
+        """
+        Context manager to provide a database session with automatic rollback on errors.
+
+        This method implements a context manager pattern for database sessions, making it
+        ideal for standalone operations or scripts that need transaction management. Unlike
+        get_session(), this is designed to be used with Python's 'with' statement and
+        provides automatic rollback on exceptions while requiring explicit commit for
+        successful operations.
+
+        Yields:
+            Session: A new SQLAlchemy database session object for executing queries
+                and managing transactions within the context block.
+
+        Raises:
+            Exception: Re-raises any exception that occurs within the context block
+                after rolling back the transaction and logging the error.
+
+        Example:
+            Basic usage with explicit commit:
+                - db_manager = DatabaseManager()
+                - with db_manager.get_transaction_session() as session:
+                    user = User(name="Alice")
+                    session.add(user)
+                    session.commit()  # Must explicitly commit
+                # Session automatically closed here
+            
+            Automatic rollback on error:
+                - with db_manager.get_transaction_session() as session:
+                    user = User(name="Bob")
+                    session.add(user)
+                    raise ValueError("Something went wrong!")
+                    # Rollback happens automatically, Bob is not saved
+            
+            Complex transaction with multiple operations:
+                - with db_manager.get_transaction_session() as session:
+                    # Multiple operations in one transaction
+                    user = User(name="Charlie")
+                    session.add(user)
+                    session.flush()  # Get the user.id
+                    
+                    profile = Profile(user_id=user.id, bio="Developer")
+                    session.add(profile)
+                    
+                    session.commit()  # Commit all changes together
+            
+            Using with try-except for custom error handling:
+                - try:
+                    with db_manager.get_transaction_session() as session:
+                        user = session.query(User).filter_by(id=1).first()
+                        user.name = "Updated Name"
+                        session.commit()
+                except Exception as e:
+                    print(f"Transaction failed: {e}")
+                    # Rollback already happened automatically
+
+        Comparison with get_session():
+            get_session() (Generator):
+                - Designed for FastAPI dependency injection
+                - Supports send() commands for fine-grained control
+                - Used with Depends() in FastAPI endpoints
+                - More flexible but requires understanding generators
+            
+            get_transaction_session() (Context Manager):
+                - Designed for standalone scripts and utility functions
+                - Simple 'with' statement usage
+                - Explicit commit required
+                - Easier to understand and use in non-FastAPI contexts
+
+        Best Practices:
+            - Always call session.commit() explicitly to save changes
+            - Use for batch operations, data migrations, or standalone scripts
+            - Prefer get_session() for FastAPI endpoints
+            - Keep transactions short to avoid holding database locks
+            - Group related operations in a single transaction for atomicity
+
+        Note:
+            - The session is automatically closed in the finally block
+            - Any uncommitted changes are lost when the session closes
+            - Automatic rollback only happens on exceptions; successful execution
+            without commit() will NOT save changes
+            - This creates a new session for each 'with' block - don't reuse
+        """
+        # Initializing the session object using Session factory
+        session = self.session_factory()
+
+        # Yielding this session object for the Generator design pattern3
+        try:
+            yield session
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Transaction failed, rolled back: {e}")
+            raise
+
+        finally:
+            session.close()
+
+# Creating a global database manager instance for Pilot
+db_manager = DatabaseManager()
