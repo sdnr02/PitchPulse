@@ -14,7 +14,7 @@ from core.base import Base
 
 # Retrieving actual database URL from .env or assigning a default url to prevent type error
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./default.db")
-REDIS_URL = os.getenv("REDIS_URL", "default_url")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Initializing Engine object for managing all connections to a database
 engine = create_engine(
