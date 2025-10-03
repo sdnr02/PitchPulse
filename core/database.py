@@ -1,6 +1,9 @@
 import os
+import json
 from contextlib import contextmanager
 from typing import Generator, Optional, Dict, List, Any, Sequence
+
+import redis
 
 from loguru import logger
 
@@ -11,7 +14,7 @@ from core.base import Base
 
 # Retrieving actual database URL from .env or assigning a default url to prevent type error
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./default.db")
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL", "default_url")
 
 # Initializing Engine object for managing all connections to a database
 engine = create_engine(
@@ -52,7 +55,7 @@ class DatabaseManager:
         - session_gen.send("commit")
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initalize the DatabaseManager with engine and session factory
 
@@ -448,5 +451,280 @@ class DatabaseManager:
         finally:
             session.close()
 
+
+class RedisManager:
+    """
+    Redis connection manager for caching and real-time features.
+    
+    This manager handles Redis connection management, caching operations,
+    and provides utilities for storing and retrieving JSON data in Redis.
+    It provides a centralized interface for all Redis operations throughout
+    the application, including JSON serialization, key expiration, and health checks.
+    
+    Attributes:
+        redis_client: Synchronous Redis client instance for managing connections 
+            to the Redis server with automatic string decoding enabled.
+    
+    Example:
+        Basic usage:
+            - redis_manager = RedisManager()
+            - redis_manager.set_json("user:123", {"name": "Alice"}, expire=3600)
+            - data = redis_manager.get_json("user:123")
+        
+        Health check:
+            - if redis_manager.health_check():
+                print("Redis is healthy")
+    """
+
+    def __init__(
+        self,
+        redis_url: str = REDIS_URL
+    ) -> None:
+        """
+        Initialize the RedisManager with a Redis client connection.
+        
+        Creates a synchronous Redis client connection with automatic response
+        decoding enabled. The client is configured to decode all responses as
+        UTF-8 strings for easier handling of text data.
+        
+        Args:
+            redis_url (str): Redis connection URL. Defaults to REDIS_URL from environment.
+                Format: redis://[[username]:[password]]@localhost:6379/0
+                Example: redis://localhost:6379/0 or redis://:password@localhost:6379/0
+        
+        Example:
+            Default initialization:
+                - redis_manager = RedisManager()
+            
+            Custom Redis URL:
+                - redis_manager = RedisManager("redis://localhost:6380/1")
+        
+        Note:
+            The decode_responses=True parameter ensures all Redis responses are
+            automatically decoded as UTF-8 strings, eliminating the need to manually
+            decode bytes objects.
+        """
+        # Explicitly type the redis_client to avoid type confusion
+        self.redis_client: redis.Redis = redis.from_url(
+            redis_url, 
+            decode_responses=True
+        )
+
+    def set_json(
+        self,
+        key: str,
+        value: Any,
+        expire: Optional[int] = None
+    ) -> bool:
+        """
+        Store JSON-serializable data in Redis with optional expiration.
+        
+        This method serializes Python objects to JSON format and stores them in Redis
+        under the specified key. It's ideal for caching complex data structures like
+        dictionaries, lists, or any JSON-serializable objects. An optional expiration
+        time can be set to automatically remove the key after a specified duration.
+        
+        Args:
+            key (str): The Redis key under which to store the data.
+                Convention: Use namespaced keys like "user:123" or "cache:product:456"
+            value (Any): Any JSON-serializable Python object (dict, list, str, int, etc.)
+                This will be serialized using json.dumps() before storage.
+            expire (Optional[int]): Optional expiration time in seconds. After this duration,
+                Redis will automatically delete the key. None means no expiration.
+                Defaults to None.
+        
+        Returns:
+            bool: True if the operation was successful, False if an error occurred.
+        
+        Example:
+            Store a dictionary with 1 hour expiration:
+                - success = redis_manager.set_json(
+                    "user:123",
+                    {"name": "Alice", "email": "alice@example.com"},
+                    expire=3600
+                )
+            
+            Store a list without expiration:
+                - redis_manager.set_json(
+                    "recent_views",
+                    [1, 2, 3, 4, 5]
+                )
+            
+            Cache API response for 5 minutes:
+                - api_data = {"results": [...], "timestamp": "2025-01-01"}
+                - redis_manager.set_json("api:response:latest", api_data, expire=300)
+        
+        Note:
+            - The value must be JSON-serializable; attempting to store objects with
+              circular references or non-JSON types will raise an exception
+            - If expire is set, Redis uses the EX parameter for second-level precision
+            - Any errors during serialization or Redis operations are logged and
+              return False rather than raising exceptions
+        """
+        try:
+            json_value = json.dumps(value)
+            result = self.redis_client.set(key, json_value, ex=expire)
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Redis set_json failed for key '{key}': {e}")
+            return False
+        
+    def get_json(self, key: str) -> Optional[Any]:
+        """
+        Retrieve and deserialize JSON data from Redis.
+        
+        This method fetches data from Redis by key and automatically deserializes
+        it from JSON format back into Python objects. It handles missing keys
+        gracefully by returning None, making it safe to use without explicit
+        existence checks.
+        
+        Args:
+            key (str): The Redis key from which to retrieve the data.
+        
+        Returns:
+            Optional[Any]: The deserialized Python object if the key exists,
+                None if the key doesn't exist or if an error occurred during retrieval.
+                The return type matches the original object type that was stored.
+        
+        Example:
+            Retrieve cached user data:
+                - user_data = redis_manager.get_json("user:123")
+                - if user_data:
+                    print(f"User: {user_data['name']}")
+                  else:
+                    print("User not found in cache")
+            
+            Retrieve a list:
+                - recent_views = redis_manager.get_json("recent_views")
+                - if recent_views:
+                    for view_id in recent_views:
+                        print(view_id)
+            
+            Safe retrieval with default value:
+                - config = redis_manager.get_json("app:config") or {"default": "value"}
+        
+        Note:
+            - Returns None for both non-existent keys and errors
+            - If the stored value is not valid JSON, an error is logged and None is returned
+            - The decode_responses=True setting ensures strings are returned directly
+              without needing manual decoding
+            - Consider the key may have expired if it was set with an expiration time
+        """
+        try:
+            # Explicitly type hint that value is a string or None
+            value: Optional[str] = self.redis_client.get(key)  # type: ignore[assignment]
+            if value:
+                return json.loads(value)
+            return None
+        except Exception as e:
+            logger.error(f"Redis get_json failed for key '{key}': {e}")
+            return None
+        
+    def delete(self, key: str) -> bool:
+        """
+        Delete a key from Redis.
+        
+        This method removes the specified key and its associated value from Redis.
+        It's useful for cache invalidation, cleanup operations, or removing expired
+        data manually. The operation is idempotent - deleting a non-existent key
+        is not an error.
+        
+        Args:
+            key (str): The Redis key to delete.
+        
+        Returns:
+            bool: True if the key existed and was deleted, False if the key didn't
+                exist or if an error occurred. Note that False doesn't necessarily
+                indicate an error - it could mean the key simply didn't exist.
+        
+        Example:
+            Delete a cached user:
+                - success = redis_manager.delete("user:123")
+                - if success:
+                    print("User cache cleared")
+                  else:
+                    print("User was not in cache")
+            
+            Invalidate multiple related keys:
+                - keys_to_delete = ["user:123", "user:123:profile", "user:123:settings"]
+                - for key in keys_to_delete:
+                    redis_manager.delete(key)
+            
+            Cache invalidation after update:
+                - # Update user in database
+                - db.update_user(user_id=123, name="Bob")
+                - # Invalidate cache
+                - redis_manager.delete("user:123")
+        
+        Note:
+            - This method only deletes a single key; for bulk deletion consider using
+              Redis pipelines or the SCAN command
+            - Returns False for non-existent keys without raising an error
+            - Any exceptions during deletion are logged and result in False return
+            - The key is immediately removed; there's no delayed or scheduled deletion
+        """
+        try:
+            result = self.redis_client.delete(key)
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Redis delete failed for key '{key}': {e}")
+            return False
+    
+    def health_check(self) -> bool:
+        """
+        Check Redis connectivity and server responsiveness.
+        
+        This method verifies that the Redis server is accessible, responsive, and
+        ready to handle commands by executing a PING command. It's typically used
+        for health check endpoints, startup validation, or monitoring systems to
+        ensure Redis is operational.
+        
+        Returns:
+            bool: True if Redis is accessible and responds to PING command correctly,
+                False if the connection fails, times out, or if Redis is unresponsive.
+        
+        Example:
+            Startup validation:
+                - redis_manager = RedisManager()
+                - if redis_manager.health_check():
+                    print("Redis is ready")
+                    app.start()
+                  else:
+                    print("Redis is unavailable, cannot start app")
+                    sys.exit(1)
+            
+            Health check endpoint:
+                - @app.get("/health")
+                  def health():
+                    redis_ok = redis_manager.health_check()
+                    db_ok = db_manager.health_check()
+                    return {
+                        "redis": "healthy" if redis_ok else "unhealthy",
+                        "database": "healthy" if db_ok else "unhealthy"
+                    }
+            
+            Periodic monitoring:
+                - if not redis_manager.health_check():
+                    logger.alert("Redis is down!")
+                    notify_ops_team()
+        
+        Note:
+            - This method creates a temporary connection for the health check
+            - The PING command is lightweight and doesn't affect Redis performance
+            - Any exceptions during the check are caught, logged, and result in
+              a False return value
+            - Consider setting appropriate timeouts in the Redis URL to avoid
+              long hangs during health checks
+        """
+        try:
+            result = self.redis_client.ping()
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Redis health check failed: {e}")
+            return False
+
 # Creating a global database manager instance for Pilot
 db_manager = DatabaseManager()
+
+# Global Redis manager instance for Pilot
+redis_manager = RedisManager()
