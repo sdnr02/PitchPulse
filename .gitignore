@@ -9,3 +9,6 @@ __pycache__/
 
 # Ignoring SQL initialization folder
 init.sql/
+
+# Ignoring setup files
+backend/pitchpulse_backend.egg-info/

@@ -1,8 +1,7 @@
+# Warning: This file was AI generated
+
 import sys
 from pathlib import Path
-
-backend_dir = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(backend_dir))
 
 from app.core.database import engine, redis_db, get_db, get_redis
 from sqlalchemy import text
