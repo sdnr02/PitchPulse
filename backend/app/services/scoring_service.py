@@ -1,7 +1,8 @@
 from uuid import uuid4
-from typing import Dict
+from typing import Dict, List
 from datetime import datetime, timezone
 
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.models.match import Match, MatchStatus
@@ -308,5 +309,42 @@ class ScoringService:
         except Exception as e:
             # Exception Handling block
             print(f"Failed to process ball event due to an error:\n{e}")
+            self.session.rollback()
+            raise
+
+    def get_matches_by_tournament(self, tournament_id: int) -> List[Match]:
+        """Method to get all the matches from a tournament"""
+        try:
+            # Querying the list of matches in a tournament
+            matches = self.session.query(Match).filter_by(tournament_id=tournament_id).order_by(desc(Match.created_at)).all()
+            return matches
+
+        except Exception as e:
+            # Exception Handling block
+            print(f"Failed to retrieve matches by tournament due to an error:\n{e}")
+            raise
+
+    def complete_match(self, match_id: int) -> Match | None:
+        """Method to mark a match as completed"""
+        try:
+            # Getting the match
+            match_by_id = self.get_match(match_id=match_id)
+            
+            if match_by_id:
+                # Setting the status to completed
+                match_by_id.status = MatchStatus.COMPLETED
+                
+                # Commiting the session
+                self.session.commit()
+                return match_by_id
+            
+            else:
+                # In case the match was not found
+                print(f"Match not found for the ID: {match_id}")
+                return None
+        
+        except Exception as e:
+            # Exception Handling block
+            print(f"Failed to complete match due to an error:\n{e}")
             self.session.rollback()
             raise
