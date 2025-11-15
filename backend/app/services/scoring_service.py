@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.match import Match, MatchStatus
 
@@ -88,6 +89,7 @@ class ScoringService:
                 match_by_id.status = MatchStatus.IN_PROGRESS
 
                 # Commiting the session
+                flag_modified(match_by_id, "score_data")
                 self.session.commit()
 
                 return match_by_id
@@ -122,6 +124,7 @@ class ScoringService:
                         print(f"Warning key: {key} is not in existing score information, skipping!")
 
                 # Commiting the session
+                flag_modified(match_by_id, "score_data")
                 self.session.commit()
 
                 return match_by_id
@@ -302,6 +305,7 @@ class ScoringService:
             match_by_id.score_data["commentary"] = ball_data["commentary"]
 
             # Commiting the session
+            flag_modified(match_by_id, "score_data")
             self.session.commit()
 
             return match_by_id
