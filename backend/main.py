@@ -1,7 +1,10 @@
+import asyncio
 from typing import List
 from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
+from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, HTTPException, Depends, Request
 
@@ -9,8 +12,10 @@ from app.core.database import get_redis
 from app.core.middleware import log_requests
 from app.core.logging_config import setup_logging
 from app.core.database import SessionLocal, get_db
-from app.models.match import Match, Tournament, Team
 from app.services.scoring_service import ScoringService
+from app.models.match import Match, Tournament, Team, User
+from app.websockets.connection_manager import ConnectionManager
+from app.websockets.scoring_ws import handle_websocket_connection, redis_subscriber
 
 from app.schemas.match_schemas import (
     TournamentCreate,
@@ -20,13 +25,18 @@ from app.schemas.match_schemas import (
     BallEvent,
     MatchResponse,
     TournamentResponse,
-    TeamResponse
+    TeamResponse,
+    UserCreate,
+    UserResponse
 )
 
 import logging
 
 setup_logging(log_level="INFO")
 logger = logging.getLogger(__name__)
+
+# Create connection manager
+manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -35,11 +45,16 @@ async def lifespan(app: FastAPI):
     logger.info("PitchPulse API starting up...")
     logger.info("Database connection initializing...")
     logger.info("Redis connection initializing...")
+
+    redis_task = asyncio.create_task(redis_subscriber(manager))
+    logger.info("Redis subscriber started")
+    
     logger.info("API ready to accept requests")
     
     yield  # The App runs here
     
-    # Shutdown: runs when app is stopping (optional)
+    # Shutdown
+    redis_task.cancel()
     logger.info("PitchPulse API shutting down...")
 
 # Initializing the app object
@@ -93,6 +108,43 @@ def get_scoring_service(db: Session = Depends(get_db)) -> ScoringService:
     # Simply returns a scoring service object
     return ScoringService(db)
 
+# WebSocket endpoint
+@app.websocket("/ws/matches/{match_id}")
+async def websocket_route(websocket: WebSocket, match_id: int):
+    """
+    WebSocket endpoint for real-time match updates
+    
+    Clients connect to: ws://localhost:8000/ws/matches/{match_id}
+    """
+    await handle_websocket_connection(websocket, match_id, manager)
+
+@app.post("/users", response_model=UserResponse, status_code=201)
+def create_user(
+    user_data: UserCreate,
+    db: Session = Depends(get_db)
+) -> User:
+    """Endpoint to create a new user"""
+    try:
+        # Creating the user object
+        user = User(
+            email = user_data.email,
+            password_hash = user_data.password_hash,
+            created_at = datetime.now(timezone.utc)
+        )
+
+        # Adding the user to the database
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        # Returning the user object
+        return user
+
+    except Exception as e:
+        # Exception Handling Block
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+
 @app.post("/tournaments", response_model=TournamentResponse, status_code=201)
 def create_tournament(
     tournament_data: TournamentCreate,
@@ -103,7 +155,8 @@ def create_tournament(
         # Initializing the tournament object
         tournament = Tournament(
             name = tournament_data.name,
-            organizer_id = tournament_data.organizer_id
+            organizer_id = tournament_data.organizer_id,
+            created_at = datetime.now(timezone.utc)
         )
         
         # Adding the tournament to the database

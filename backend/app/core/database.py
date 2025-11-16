@@ -4,6 +4,7 @@ from typing import Generator
 
 import redis
 from dotenv import load_dotenv
+import redis.asyncio as aioredis
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.declarative import  declarative_base
@@ -11,7 +12,6 @@ from sqlalchemy.ext.declarative import  declarative_base
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://username:password@localhost:5432/database")
-REDIS_URL = os.getenv("REDIS_URL","redis://localhost:6379")
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,9 @@ SessionLocal = sessionmaker(bind=engine)
 
 Base = declarative_base()
 
-redis_db = redis.Redis.from_url(REDIS_URL)
+REDIS_HOST = "localhost"
+REDIS_PORT = 6379
+redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 def get_db() -> Generator[Session,None,None]:
     """Generator function to yield session objects for FastAPI dependency injection"""
@@ -37,6 +39,18 @@ def get_db() -> Generator[Session,None,None]:
     finally:
         session.close()
 
+async_redis_client = None
+
 def get_redis() -> redis.Redis:
-    """Simple function to return the global shared Redis client"""
-    return redis_db
+    """Method to get the sync Redis client (for publishing)"""
+    return redis_client
+
+async def get_async_redis() -> aioredis.Redis:
+    """Method to get the async Redis client (for subscribing)"""
+    global async_redis_client
+    if async_redis_client is None:
+        async_redis_client = await aioredis.from_url(
+            f"redis://{REDIS_HOST}:{REDIS_PORT}",
+            decode_responses=True
+        )
+    return async_redis_client

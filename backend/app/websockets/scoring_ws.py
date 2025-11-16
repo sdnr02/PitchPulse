@@ -3,7 +3,7 @@ import logging
 import asyncio
 from fastapi import WebSocket, WebSocketDisconnect
 
-from app.core.database import get_db, get_redis
+from app.core.database import get_db, get_async_redis
 from app.services.scoring_service import ScoringService
 from app.websockets.connection_manager import ConnectionManager
 
@@ -81,7 +81,7 @@ async def handle_websocket_connection(
     finally:
         # Cleanup
         heartbeat_task.cancel()
-        manager.disconnect(websocket, match_id)
+        await manager.disconnect(websocket, match_id)
 
 async def send_heartbeat(websocket: WebSocket, match_id: int) -> None:
     """Sending periodic pings to keep the connection alive and detect dead connections"""
@@ -105,33 +105,33 @@ async def send_heartbeat(websocket: WebSocket, match_id: int) -> None:
         logger.debug(f"Heartbeat task cancelled for match {match_id}")
 
 async def redis_subscriber(manager: ConnectionManager) -> None:
-    """Background task that listens to Redis pub/sub and forwards updates to WebSocket clients"""
+    """Background function that listens to Redis pub/sub and forwards updates to WebSocket clients"""
     # Logging for start-up
-    logger.info("Starting Redis subscriber...")
+    logger.info("Starting async Redis subscriber...")
     
     try:
-        # Getting the Redis client
-        redis_client = get_redis()
+        # Getting the async Redis client
+        redis = await get_async_redis()
         
         # Creating a pubsub object
-        pubsub = redis_client.pubsub()
+        pubsub = redis.pubsub()
         
         # Subscribing to all match channels using pattern
-        pubsub.psubscribe("match: *")
+        await pubsub.psubscribe("match: *")
         
-        logger.info("Redis subscriber listening on match: * channels")
+        logger.info("Async Redis subscriber listening on match: * channels")
         
-        # Listening for messages
-        for message in pubsub.listen():
+        # Listening for messages asynchronously
+        async for message in pubsub.listen():
             # Checking if this is a pattern message
             if message["type"] == "pmessage":
                 # Extracting channel and data
-                channel = message["channel"].decode("utf-8")
-                data = message["data"].decode("utf-8")
+                channel = message["channel"]
+                data = message["data"]
                 
-                # Extracting match_id from channel name (e.g., "match:123" -> 123)
+                # Extracting match_id from channel name (e.g., "match: 123" -> 123)
                 try:
-                    match_id = int(channel.split(":")[1])
+                    match_id = int(channel.split(": ")[1])
                     
                     # Broadcasting to all WebSocket clients watching this match
                     await manager.broadcast_to_match(match_id, data)
@@ -142,4 +142,4 @@ async def redis_subscriber(manager: ConnectionManager) -> None:
     
     except Exception as e:
         # Exception handling block
-        logger.error(f"Redis subscriber error: {e}", exc_info=True)
+        logger.error(f"Async Redis subscriber error: {e}", exc_info=True)

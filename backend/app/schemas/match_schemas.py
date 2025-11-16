@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional, Dict
 from pydantic import BaseModel, Field
 
@@ -45,7 +46,6 @@ class TournamentResponse(BaseModel):
     class Config:
         from_attributes = True  # Allows creating from ORM models
 
-
 class TeamResponse(BaseModel):
     id: int = Field(..., gt=0, description="Unique ID of the Team")
     name: str = Field(..., min_length=1, max_length=255, description="Name of the Team")
@@ -53,3 +53,15 @@ class TeamResponse(BaseModel):
     
     class Config:
         from_attributes = True  # Allows creating from ORM models
+
+class UserCreate(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255, description="User email address")
+    password_hash: str = Field(..., min_length=1, description="Hashed password")
+
+class UserResponse(BaseModel):
+    id: int = Field(..., gt=0, description="Unique ID of the User")
+    email: str = Field(..., min_length=3, max_length=255, description="User email address")
+    created_at: datetime = Field(..., description="When the user was created")
+    
+    class Config:
+        from_attributes = True

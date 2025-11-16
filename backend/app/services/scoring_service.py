@@ -7,7 +7,9 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.core.database import get_redis
 from app.models.match import Match, MatchStatus
+from app.core.redis_publisher import RedisPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +312,30 @@ class ScoringService:
             # Commiting the session
             flag_modified(match_by_id, "score_data")
             self.session.commit()
+
+            # Publishing update to Redis for real-time broadcasting
+            try:
+                redis_client = get_redis()
+                publisher = RedisPublisher(redis_client)
+                
+                # Creating the update data
+                update_data = {
+                    "type": "score_update",
+                    "match_id": match_by_id.id,
+                    "tournament_id": match_by_id.tournament_id,
+                    "team1_id": match_by_id.team1_id,
+                    "team2_id": match_by_id.team2_id,
+                    "status": match_by_id.status.value,
+                    "score_data": match_by_id.score_data
+                }
+                
+                # Publishing to Redis
+                publisher.publish_match_update(match_id, update_data)
+                logger.info(f"Published score update for match {match_id} to Redis")
+                
+            except Exception as e:
+                # Logging but not failing the request if Redis publish fails
+                logger.error(f"Failed to publish to Redis: {e}", exc_info=True)
 
             return match_by_id
         
