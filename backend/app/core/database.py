@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import Generator
 
 import redis
@@ -11,6 +12,8 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://username:password@localhost:5432/database")
 REDIS_URL = os.getenv("REDIS_URL","redis://localhost:6379")
+
+logger = logging.getLogger(__name__)
 
 engine = create_engine(DATABASE_URL)
 
@@ -27,8 +30,9 @@ def get_db() -> Generator[Session,None,None]:
         yield session
 
     except Exception as e:
+        logger.error(f"Database session error: {e}", exc_info=True)
         session.rollback()
-        raise f"Error encountered while yielding the session: {e}"
+        raise
 
     finally:
         session.close()

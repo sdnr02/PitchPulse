@@ -1,7 +1,13 @@
 from typing import List
 from sqlalchemy.orm import Session
-from fastapi import FastAPI, HTTPException, Depends
+from contextlib import asynccontextmanager
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Depends, Request
 
+from app.core.database import get_redis
+from app.core.middleware import log_requests
+from app.core.logging_config import setup_logging
 from app.core.database import SessionLocal, get_db
 from app.models.match import Match, Tournament, Team
 from app.services.scoring_service import ScoringService
@@ -17,12 +23,70 @@ from app.schemas.match_schemas import (
     TeamResponse
 )
 
+import logging
+
+setup_logging(log_level="INFO")
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events"""
+    # On Startup: this runs before app starts accepting requests
+    logger.info("PitchPulse API starting up...")
+    logger.info("Database connection initializing...")
+    logger.info("Redis connection initializing...")
+    logger.info("API ready to accept requests")
+    
+    yield  # The App runs here
+    
+    # Shutdown: runs when app is stopping (optional)
+    logger.info("PitchPulse API shutting down...")
+
 # Initializing the app object
 app = FastAPI(
     title="PitchPulse API",
     description="Real-time cricket scoring API",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"], # Allow all HTTP methods
+    allow_headers=["*"] # Allowing all headers
+)
+
+app.middleware("http")(log_requests)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler to catch all unhandled exceptions"""
+    # Logging the error with full details
+    logger.error(
+        f"Unhandled exception: {exc}",
+        exc_info=True,
+        extra={
+            "path": request.url.path,
+            "method": request.method
+        }
+    )
+    
+    # Returning a JSON error response
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal Server Error",
+            "message": str(exc),
+            "path": str(request.url.path)
+        }
+    )
 
 def get_scoring_service(db: Session = Depends(get_db)) -> ScoringService:
     """Dependecy Injection function for the scoring service"""
@@ -238,6 +302,30 @@ def complete_match(
     except Exception as e:
         # Exception Handling Block
         raise HTTPException(status_code=500, detail=f"Failed to complete match: {str(e)}")
+
+@app.get("/health", status_code=200)
+def health_check(db: Session = Depends(get_db)):
+    """Health check endpoint to verify API and database connectivity"""
+    try:
+        # Test database connection
+        db.execute("SELECT 1")
+        
+        # Test Redis connection
+        redis_client = get_redis()
+        redis_client.ping()
+        
+        return {
+            "status": "healthy",
+            "version": "1.0.0",
+            "database": "connected",
+            "redis": "connected"
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service unhealthy: {str(e)}"
+        )
     
 if __name__ == "__main__":
     import uvicorn

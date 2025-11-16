@@ -1,3 +1,4 @@
+import logging
 from uuid import uuid4
 from typing import Dict, List
 from datetime import datetime, timezone
@@ -7,6 +8,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.match import Match, MatchStatus
+
+logger = logging.getLogger(__name__)
 
 class ScoringService:
 
@@ -37,7 +40,7 @@ class ScoringService:
 
         except Exception as e:
             # Exception Handling block
-            print(f"Failed to create a new Match object: \n{e}")
+            logger.error(f"Failed to create a new Match object: \n{e}", exc_info=True)
             self.session.rollback()
             raise
 
@@ -55,7 +58,7 @@ class ScoringService:
         
         except Exception as e:
             # Exception Handling Block
-            print(f"Failed to retrieve match due to an error: \n{e}")
+            logger.error(f"Failed to retrieve match due to an error: \n{e}", exc_info=True)
             raise
         
     def initialize_score(
@@ -96,12 +99,12 @@ class ScoringService:
 
             else:
                 # In case the match was not found
-                print(f"Match not found for the ID: {match_id}")
+                logger.warning(f"Match not found for the ID: {match_id}")
                 return None
             
         except Exception as e:
             # Exception Handling block
-            print(f"Failed to initialize score information due to an error:\n{e}")
+            logger.error(f"Failed to initialize score information due to an error:\n{e}", exc_info=True)
             raise
 
     def update_score(self, match_id: int, updates: Dict) -> Match | None:
@@ -113,7 +116,7 @@ class ScoringService:
             if match_by_id:
                 # Checking if the score information exists
                 if match_by_id.score_data is None:
-                    print("Error: Score not initialized!")
+                    logger.warning("Warning: Score not initialized!")
                     return None
 
                 # Iterating through the dictionary with score updates
@@ -121,7 +124,7 @@ class ScoringService:
                     if key in match_by_id.score_data:
                         match_by_id.score_data[key] = item
                     else:
-                        print(f"Warning key: {key} is not in existing score information, skipping!")
+                        logger.warning(f"Warning key: {key} is not in existing score information, skipping!")
 
                 # Commiting the session
                 flag_modified(match_by_id, "score_data")
@@ -131,12 +134,12 @@ class ScoringService:
             
             else:
                 # In case the match was not found
-                print(f"Match not found for the ID: {match_id}")
+                logger.warning(f"Match not found for the ID: {match_id}")
                 return None
             
         except Exception as e:
             # Exception Handling block
-            print(f"Failed to update score information due to an error:\n{e}")
+            logger.error(f"Failed to update score information due to an error:\n{e}", exc_info=True)
             raise
     
     def _calculate_new_overs(self, current_overs: float, is_legal_ball: bool) -> float:
@@ -162,7 +165,7 @@ class ScoringService:
                 return current_overs
             
         except Exception as e:
-            print(f"Error in calculating new overs after incrementing:\n{e}")
+            logger.error(f"Error in calculating new overs after incrementing:\n{e}", exc_info=True)
             return current_overs
 
     def process_ball_event(self, match_id: int, ball_data: Dict) -> Match | None:
@@ -173,11 +176,11 @@ class ScoringService:
 
             # Checking if both the match and the score information exist
             if not match_by_id:
-                print(f"Match not found for ID: {match_id}")
+                logger.warning(f"Match not found for ID: {match_id}")
                 return None
                 
             if match_by_id.score_data is None:
-                print("Error: Score not initialized!")
+                logger.warning("Warning: Score not initialized!")
                 return None
 
             # Extracting current state
@@ -312,7 +315,7 @@ class ScoringService:
         
         except Exception as e:
             # Exception Handling block
-            print(f"Failed to process ball event due to an error:\n{e}")
+            logger.error(f"Failed to process ball event due to an error:\n{e}", exc_info=True)
             self.session.rollback()
             raise
 
@@ -325,7 +328,7 @@ class ScoringService:
 
         except Exception as e:
             # Exception Handling block
-            print(f"Failed to retrieve matches by tournament due to an error:\n{e}")
+            logger.error(f"Failed to retrieve matches by tournament due to an error:\n{e}", exc_info=True)
             raise
 
     def complete_match(self, match_id: int) -> Match | None:
@@ -344,11 +347,11 @@ class ScoringService:
             
             else:
                 # In case the match was not found
-                print(f"Match not found for the ID: {match_id}")
+                logger.warning(f"Match not found for the ID: {match_id}")
                 return None
         
         except Exception as e:
             # Exception Handling block
-            print(f"Failed to complete match due to an error:\n{e}")
+            logger.error(f"Failed to complete match due to an error:\n{e}", exc_info=True)
             self.session.rollback()
             raise

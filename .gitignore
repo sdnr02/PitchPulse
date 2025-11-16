@@ -12,3 +12,6 @@ init.sql/
 
 # Ignoring setup files
 backend/pitchpulse_backend.egg-info/
+
+# Ignoring log files
+backend/logs/
