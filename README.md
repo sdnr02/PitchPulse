@@ -28,3 +28,7 @@ PitchPulse is a comprehensive SaaS platform built with Python FastAPI that enabl
 git clone https://github.com/sdnr02/PitchPulse.git
 cd PitchPulse
 ```
+
+## Updates
+
+- PHASE 2 COMING SOON!
